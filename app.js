@@ -491,7 +491,7 @@ async function initializeSharedStorage() {
     const remoteKeys = await readSharedStorage();
     sharedStorageReady = true;
     sharedStorageLastError = "";
-    const localKeys = collectSharedStorageKeys(SHARED_STORAGE_KEYS);
+    const localKeys = collectSharedStorageKeys(getCloudSyncConfig().enabled ? CLOUD_SYNC_STORAGE_KEYS : SHARED_STORAGE_KEYS);
     const merged = mergeSharedStorage(localKeys, remoteKeys);
     applySharedStorageKeys(merged);
     sharedStorageLastSignature = storageSignature(remoteKeys);
