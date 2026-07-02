@@ -10,6 +10,7 @@ const EDITOR_DRAFT_KEY = "rizhi.editor.draft.v1";
 const QQ_IMPORT_URL = "./data/qq-notepad-import.json";
 const AUTH_KEY = "rizhi.auth.v1";
 const AUTH_SESSION_KEY = "rizhi.auth.unlocked.v1";
+const AUTH_SESSION_UNTIL_KEY = "rizhi.auth.unlockedUntil.v1";
 const AUTH_RECOVERY_VERIFIED_KEY = "rizhi.auth.recoveryVerified.v1";
 const AUTH_ITERATIONS = 180000;
 const RECOVERY_QUESTION_COUNT = 3;
@@ -124,6 +125,7 @@ let sharedStorageReady = false;
 let sharedStorageLastError = "";
 let sharedStorageWriteQueue = Promise.resolve();
 let sharedStorageLastSignature = "";
+let sharedStorageLastRefreshAt = 0;
 
 function uid() {
   if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
@@ -508,6 +510,44 @@ async function initializeSharedStorage() {
   }
 }
 
+async function refreshSharedStorage(reason = "同步刷新", options = {}) {
+  const { renderAfter = true, notice = true } = options;
+  if (typeof fetch !== "function") return false;
+  sharedStorageLastRefreshAt = Date.now();
+  if (state.view === "editor") collectEntryDraft();
+  if (state.view === "import") collectImportDraft();
+
+  try {
+    await sharedStorageWriteQueue.catch(() => {});
+    const remoteKeys = await readSharedStorage();
+    sharedStorageReady = true;
+    sharedStorageLastError = "";
+    const localKeys = collectSharedStorageKeys(getCloudSyncConfig().enabled ? CLOUD_SYNC_STORAGE_KEYS : SHARED_STORAGE_KEYS);
+    const merged = mergeSharedStorage(localKeys, remoteKeys);
+    applySharedStorageKeys(merged);
+    sharedStorageLastSignature = storageSignature(remoteKeys);
+    await writeSharedStorage(reason);
+    loadEntries();
+    if (notice) {
+      state.libraryNotice = { type: "success", text: `同步完成，当前 ${activeEntries().length} 篇日记。` };
+    }
+    if (renderAfter) render();
+    return true;
+  } catch (error) {
+    sharedStorageReady = false;
+    sharedStorageLastError = String(error?.message || error || "sync_failed");
+    if (notice) state.libraryNotice = { type: "error", text: "同步刷新失败，请稍后再试。" };
+    if (renderAfter) render();
+    return false;
+  }
+}
+
+function maybeRefreshSharedStorage(reason = "自动同步刷新") {
+  if (!isSessionUnlocked() || appShell.classList.contains("hidden")) return;
+  if (Date.now() - sharedStorageLastRefreshAt < 15000) return;
+  refreshSharedStorage(reason, { renderAfter: true, notice: false });
+}
+
 function todayStr() {
   const now = new Date();
   const month = String(now.getMonth() + 1).padStart(2, "0");
@@ -596,13 +636,22 @@ function getAuthConfig() {
 function setSessionUnlocked(value) {
   if (value) {
     sessionStorage.setItem(AUTH_SESSION_KEY, "1");
+    localStorage.setItem(AUTH_SESSION_UNTIL_KEY, String(Date.now() + AUTO_LOCK_MS));
     return;
   }
   sessionStorage.removeItem(AUTH_SESSION_KEY);
+  localStorage.removeItem(AUTH_SESSION_UNTIL_KEY);
 }
 
 function isSessionUnlocked() {
-  return sessionStorage.getItem(AUTH_SESSION_KEY) === "1";
+  if (sessionStorage.getItem(AUTH_SESSION_KEY) === "1") return true;
+  const unlockedUntil = Number(localStorage.getItem(AUTH_SESSION_UNTIL_KEY) || "0");
+  if (unlockedUntil > Date.now()) {
+    sessionStorage.setItem(AUTH_SESSION_KEY, "1");
+    return true;
+  }
+  localStorage.removeItem(AUTH_SESSION_UNTIL_KEY);
+  return false;
 }
 
 function stopAutoLockTimer() {
@@ -635,11 +684,13 @@ function noteUserActivity() {
   const now = Date.now();
   if (autoLockTimer && now - lastActivityAt < 1000) return;
   lastActivityAt = now;
+  localStorage.setItem(AUTH_SESSION_UNTIL_KEY, String(now + AUTO_LOCK_MS));
   scheduleAutoLock();
 }
 
 function startAutoLockTimer() {
   lastActivityAt = Date.now();
+  localStorage.setItem(AUTH_SESSION_UNTIL_KEY, String(lastActivityAt + AUTO_LOCK_MS));
   scheduleAutoLock();
 }
 
@@ -5158,6 +5209,12 @@ document.addEventListener("click", async (event) => {
     lockApp();
     return;
   }
+  if (action === "sync-refresh") {
+    state.libraryNotice = { type: "success", text: "正在同步刷新..." };
+    render();
+    await refreshSharedStorage("手动同步刷新");
+    return;
+  }
   if (action === "view-entry") {
     state.selectedId = id;
     state.view = "detail";
@@ -5369,6 +5426,11 @@ document.addEventListener("change", async (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden || !isSessionUnlocked()) return;
   handleAutoLockTimeout();
+  maybeRefreshSharedStorage("回到前台同步");
+});
+
+window.addEventListener("focus", () => {
+  maybeRefreshSharedStorage("窗口聚焦同步");
 });
 
 async function startApp() {

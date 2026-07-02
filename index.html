@@ -85,6 +85,10 @@
             <input id="global-search" type="search" placeholder="搜索回忆、人物、地点、标签" />
           </div>
           <div class="topbar-actions">
+            <button class="ghost-button" data-action="sync-refresh" type="button" title="同步刷新">
+              <span class="icon" data-icon="upload"></span>
+              <span>同步刷新</span>
+            </button>
             <button class="ghost-button" data-action="random-entry" type="button" title="随机回看">
               <span class="icon" data-icon="shuffle"></span>
               <span>随机回看</span>
@@ -134,7 +138,7 @@
         }
       })();
     </script>
-    <script src="./app.js?v=20260702-mobile-quick-bind"></script>
+    <script src="./app.js?v=20260702-sync-refresh-session"></script>
     <script>
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", () => {
