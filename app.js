@@ -18,6 +18,7 @@ const SHARED_STORAGE_API = "./api/storage";
 const SERVER_AUTH_VERIFY_API = "./api/auth/verify";
 const CLOUD_SYNC_API_KEY = "rizhi.cloudSync.api.v1";
 const CLOUD_SYNC_TOKEN_KEY = "rizhi.cloudSync.token.v1";
+const CLOUD_SYNC_ENCRYPTION_KEY = "rizhi.cloudSync.encryptionKey.v1";
 const SHARED_STORAGE_KEYS = [
   STORAGE_KEY,
   STORAGE_BACKUP_KEY,
@@ -131,17 +132,20 @@ function normalizeSyncApi(value = "") {
 function getCloudSyncConfig() {
   const api = normalizeSyncApi(localStorage.getItem(CLOUD_SYNC_API_KEY));
   const token = String(localStorage.getItem(CLOUD_SYNC_TOKEN_KEY) || "").trim();
-  return { api, token, enabled: Boolean(api && token) };
+  const encryptionKey = String(localStorage.getItem(CLOUD_SYNC_ENCRYPTION_KEY) || "").trim();
+  return { api, token, encryptionKey, enabled: Boolean(api && token), encrypted: Boolean(api && token && encryptionKey) };
 }
 
-function saveCloudSyncConfig(api, token) {
+function saveCloudSyncConfig(api, token, encryptionKey = "") {
   localStorage.setItem(CLOUD_SYNC_API_KEY, normalizeSyncApi(api));
   localStorage.setItem(CLOUD_SYNC_TOKEN_KEY, String(token || "").trim());
+  if (encryptionKey) localStorage.setItem(CLOUD_SYNC_ENCRYPTION_KEY, String(encryptionKey).trim());
 }
 
 function clearCloudSyncConfig() {
   localStorage.removeItem(CLOUD_SYNC_API_KEY);
   localStorage.removeItem(CLOUD_SYNC_TOKEN_KEY);
+  localStorage.removeItem(CLOUD_SYNC_ENCRYPTION_KEY);
 }
 
 function applyCloudSyncConfigFromUrl() {
@@ -149,13 +153,15 @@ function applyCloudSyncConfigFromUrl() {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
   const api = params.get("syncApi") || hashParams.get("syncApi");
   const token = params.get("syncToken") || hashParams.get("syncToken");
-  if (!api && !token) return;
+  const encryptionKey = params.get("syncKey") || hashParams.get("syncKey");
+  if (!api && !token && !encryptionKey) return;
 
   const current = getCloudSyncConfig();
-  saveCloudSyncConfig(api || current.api, token || current.token);
+  saveCloudSyncConfig(api || current.api, token || current.token, encryptionKey || current.encryptionKey);
 
   params.delete("syncApi");
   params.delete("syncToken");
+  params.delete("syncKey");
   const nextQuery = params.toString();
   const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
   window.history.replaceState({}, "", nextUrl);
@@ -181,6 +187,51 @@ function parseJsonSafe(raw, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function generateCloudEncryptionKey() {
+  const key = new Uint8Array(32);
+  crypto.getRandomValues(key);
+  return bytesToBase64(key);
+}
+
+async function importCloudEncryptionKey() {
+  const { encryptionKey } = getCloudSyncConfig();
+  if (!encryptionKey) throw new Error("Missing cloud encryption key");
+  return crypto.subtle.importKey("raw", base64ToBytes(encryptionKey), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+
+async function encryptCloudStorageKeys(keys, reason = "云同步") {
+  if (!hasPasswordCrypto()) throw new Error("Cloud encryption unavailable");
+  const key = await importCloudEncryptionKey();
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+  const plaintext = JSON.stringify({
+    version: 1,
+    reason,
+    createdAt: new Date().toISOString(),
+    keys
+  });
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(plaintext));
+  return {
+    version: 1,
+    algorithm: "AES-GCM",
+    keyFormat: "raw-256",
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext))
+  };
+}
+
+async function decryptCloudStoragePayload(payload) {
+  if (!payload?.iv || !payload?.ciphertext) throw new Error("Invalid encrypted payload");
+  const key = await importCloudEncryptionKey();
+  const decrypted = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(payload.iv) },
+    key,
+    base64ToBytes(payload.ciphertext)
+  );
+  const data = JSON.parse(new TextDecoder().decode(decrypted));
+  return data?.keys && typeof data.keys === "object" ? data.keys : {};
 }
 
 function collectSharedStorageKeys() {
@@ -385,6 +436,7 @@ async function readSharedStorage() {
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = await response.json();
+  if (data?.encrypted) return decryptCloudStoragePayload(data.payload);
   return data?.keys && typeof data.keys === "object" ? data.keys : {};
 }
 
@@ -395,10 +447,14 @@ async function writeSharedStorage(reason = "数据同步") {
   if (signature === sharedStorageLastSignature) return true;
   sharedStorageLastSignature = signature;
 
+  const config = getCloudSyncConfig();
+  const body = config.enabled
+    ? { reason, encrypted: true, payload: await encryptCloudStorageKeys(keys, reason) }
+    : { reason, keys };
   const response = await fetch(sharedStorageUrl(), {
     method: "POST",
     headers: sharedStorageHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ reason, keys })
+    body: JSON.stringify(body)
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return true;
@@ -489,7 +545,12 @@ function hydrateStaticIcons() {
 }
 
 function bytesToBase64(bytes) {
-  return btoa(String.fromCharCode(...bytes));
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return btoa(binary);
 }
 
 function base64ToBytes(value) {
@@ -4328,8 +4389,12 @@ function renderCloudSyncPanel() {
           <label for="cloud-sync-token">同步密钥</label>
           <input id="cloud-sync-token" name="token" type="password" placeholder="${config.token ? "已保存，留空则不修改" : "填写 Worker 里设置的 SYNC_TOKEN"}" autocomplete="off" />
         </div>
+        <div class="field">
+          <label for="cloud-sync-key">端到端加密钥匙</label>
+          <input id="cloud-sync-key" name="encryptionKey" type="password" placeholder="${config.encryptionKey ? "已保存，留空则不修改" : "留空则自动生成"}" autocomplete="off" />
+        </div>
         <div class="form-actions">
-          <span class="muted-text">${config.enabled ? "当前设备已绑定云同步。" : "同步密钥不会提交到 GitHub，只保存在当前浏览器。"}</span>
+          <span class="muted-text">${config.encrypted ? "云端只保存加密后的日记密文。" : "加密钥匙不会发送到 Cloudflare，只保存在设备上。"}</span>
           <button class="ghost-button" data-action="clear-cloud-sync" type="button">关闭云同步</button>
           <button class="primary-button" type="submit">
             <span class="icon" data-icon="save"></span><span>保存并同步</span>
@@ -4486,6 +4551,7 @@ async function handleCloudSyncSettings(form) {
   const current = getCloudSyncConfig();
   const api = normalizeSyncApi(data.api);
   const token = String(data.token || "").trim() || current.token;
+  let encryptionKey = String(data.encryptionKey || "").trim() || current.encryptionKey;
 
   if (!api || !token) {
     state.cloudSyncNotice = { type: "error", text: "请填写同步接口地址和同步密钥。" };
@@ -4499,7 +4565,8 @@ async function handleCloudSyncSettings(form) {
     return;
   }
 
-  saveCloudSyncConfig(api, token);
+  if (!encryptionKey) encryptionKey = generateCloudEncryptionKey();
+  saveCloudSyncConfig(api, token, encryptionKey);
   try {
     await initializeSharedStorage();
     loadEntries();

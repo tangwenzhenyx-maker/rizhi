@@ -53,6 +53,7 @@ async function readStore(env) {
   if (!value) return emptyStore();
   try {
     const parsed = JSON.parse(value);
+    if (parsed && parsed.encrypted && parsed.payload && typeof parsed.payload === "object") return parsed;
     return parsed && typeof parsed === "object" && parsed.keys && typeof parsed.keys === "object" ? parsed : emptyStore();
   } catch {
     return emptyStore();
@@ -62,6 +63,18 @@ async function readStore(env) {
 function cleanKeys(keys) {
   if (!keys || typeof keys !== "object" || Array.isArray(keys)) return null;
   return Object.fromEntries(Object.entries(keys).filter(([, value]) => typeof value === "string"));
+}
+
+function cleanEncryptedPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (!payload.iv || !payload.ciphertext) return null;
+  return {
+    version: Number(payload.version || 1),
+    algorithm: String(payload.algorithm || "AES-GCM"),
+    keyFormat: String(payload.keyFormat || "raw-256"),
+    iv: String(payload.iv),
+    ciphertext: String(payload.ciphertext),
+  };
 }
 
 export default {
@@ -97,25 +110,38 @@ export default {
       return jsonResponse(request, env, { ok: false, error: "invalid_json" }, 400);
     }
 
-    const keys = cleanKeys(incoming.keys);
-    if (!keys) return jsonResponse(request, env, { ok: false, error: "missing_keys" }, 400);
+    const encryptedPayload = incoming.encrypted ? cleanEncryptedPayload(incoming.payload) : null;
+    const keys = incoming.encrypted ? null : cleanKeys(incoming.keys);
+    if (!encryptedPayload && !keys) return jsonResponse(request, env, { ok: false, error: "missing_payload" }, 400);
 
     const previous = await readStore(env);
-    const payload = {
-      version: 1,
-      updatedAt: new Date().toISOString(),
-      reason: String(incoming.reason || "云同步"),
-      keys,
-    };
+    const payload = encryptedPayload
+      ? {
+          version: 2,
+          encrypted: true,
+          updatedAt: new Date().toISOString(),
+          reason: String(incoming.reason || "端到端加密云同步"),
+          payload: encryptedPayload,
+        }
+      : {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          reason: String(incoming.reason || "云同步"),
+          keys,
+        };
 
-    if (JSON.stringify(previous.keys || {}) !== JSON.stringify(keys)) {
-      if (previous.keys && Object.keys(previous.keys).length) {
+    if (JSON.stringify(previous) !== JSON.stringify(payload)) {
+      if ((previous.keys && Object.keys(previous.keys).length) || previous.encrypted) {
         await env.RIZHI_STORE.put(`${BACKUP_PREFIX}${Date.now()}`, JSON.stringify(previous));
       }
       await env.RIZHI_STORE.put(STORE_KEY, JSON.stringify(payload));
     }
 
-    return jsonResponse(request, env, { ok: true, updatedAt: payload.updatedAt, keyCount: Object.keys(keys).length });
+    return jsonResponse(request, env, {
+      ok: true,
+      encrypted: Boolean(encryptedPayload),
+      updatedAt: payload.updatedAt,
+      keyCount: keys ? Object.keys(keys).length : 0,
+    });
   },
 };
-

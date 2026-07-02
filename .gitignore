@@ -4,6 +4,9 @@ __pycache__/
 .env
 .wrangler/
 cloudflare-worker/.wrangler/
+cloudflare-worker/.sync-token
+cloudflare-worker/.sync-key
+cloudflare-worker/mobile-bind-url.txt
 
 # Private diary/import/runtime data. Do not publish these files.
 data/*
