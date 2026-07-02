@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .env
+.wrangler/
+cloudflare-worker/.wrangler/
 
 # Private diary/import/runtime data. Do not publish these files.
 data/*

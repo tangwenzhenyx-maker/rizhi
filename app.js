@@ -16,6 +16,8 @@ const RECOVERY_QUESTION_COUNT = 3;
 const AUTO_LOCK_MS = 5 * 60 * 1000;
 const SHARED_STORAGE_API = "./api/storage";
 const SERVER_AUTH_VERIFY_API = "./api/auth/verify";
+const CLOUD_SYNC_API_KEY = "rizhi.cloudSync.api.v1";
+const CLOUD_SYNC_TOKEN_KEY = "rizhi.cloudSync.token.v1";
 const SHARED_STORAGE_KEYS = [
   STORAGE_KEY,
   STORAGE_BACKUP_KEY,
@@ -96,6 +98,7 @@ const state = {
   authError: "",
   preAuthRepairNotice: null,
   securityNotice: null,
+  cloudSyncNotice: null,
   lifeReportNotice: null,
   editorNotice: null,
   lifeQuestion: "",
@@ -119,6 +122,57 @@ function uid() {
 
 function isPublicStaticDeployment() {
   return /(^|\.)github\.io$/i.test(window.location.hostname);
+}
+
+function normalizeSyncApi(value = "") {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function getCloudSyncConfig() {
+  const api = normalizeSyncApi(localStorage.getItem(CLOUD_SYNC_API_KEY));
+  const token = String(localStorage.getItem(CLOUD_SYNC_TOKEN_KEY) || "").trim();
+  return { api, token, enabled: Boolean(api && token) };
+}
+
+function saveCloudSyncConfig(api, token) {
+  localStorage.setItem(CLOUD_SYNC_API_KEY, normalizeSyncApi(api));
+  localStorage.setItem(CLOUD_SYNC_TOKEN_KEY, String(token || "").trim());
+}
+
+function clearCloudSyncConfig() {
+  localStorage.removeItem(CLOUD_SYNC_API_KEY);
+  localStorage.removeItem(CLOUD_SYNC_TOKEN_KEY);
+}
+
+function applyCloudSyncConfigFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const api = params.get("syncApi") || hashParams.get("syncApi");
+  const token = params.get("syncToken") || hashParams.get("syncToken");
+  if (!api && !token) return;
+
+  const current = getCloudSyncConfig();
+  saveCloudSyncConfig(api || current.api, token || current.token);
+
+  params.delete("syncApi");
+  params.delete("syncToken");
+  const nextQuery = params.toString();
+  const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+  window.history.replaceState({}, "", nextUrl);
+}
+
+function sharedStorageUrl() {
+  const config = getCloudSyncConfig();
+  return config.enabled ? `${config.api}/api/storage` : SHARED_STORAGE_API;
+}
+
+function sharedStorageHeaders(extra = {}) {
+  const config = getCloudSyncConfig();
+  return {
+    Accept: "application/json",
+    ...(config.enabled ? { Authorization: `Bearer ${config.token}` } : {}),
+    ...extra
+  };
 }
 
 function parseJsonSafe(raw, fallback = null) {
@@ -325,9 +379,9 @@ function storageSignature(keys = collectSharedStorageKeys()) {
 }
 
 async function readSharedStorage() {
-  const response = await fetch(`${SHARED_STORAGE_API}?t=${Date.now()}`, {
+  const response = await fetch(`${sharedStorageUrl()}?t=${Date.now()}`, {
     cache: "no-store",
-    headers: { Accept: "application/json" }
+    headers: sharedStorageHeaders()
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = await response.json();
@@ -341,9 +395,9 @@ async function writeSharedStorage(reason = "数据同步") {
   if (signature === sharedStorageLastSignature) return true;
   sharedStorageLastSignature = signature;
 
-  const response = await fetch(SHARED_STORAGE_API, {
+  const response = await fetch(sharedStorageUrl(), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: sharedStorageHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ reason, keys })
   });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -362,6 +416,8 @@ function queueSharedStorageWrite(reason = "数据同步") {
 
 async function initializeSharedStorage() {
   if (typeof fetch !== "function") return;
+  applyCloudSyncConfigFromUrl();
+  if (isPublicStaticDeployment() && !getCloudSyncConfig().enabled) return;
   try {
     const remoteKeys = await readSharedStorage();
     sharedStorageReady = true;
@@ -4253,6 +4309,37 @@ function renderDataHealth(counts, snapshots) {
   `;
 }
 
+function renderCloudSyncPanel() {
+  const config = getCloudSyncConfig();
+  const notice = state.cloudSyncNotice
+    ? `<div class="form-message ${state.cloudSyncNotice.type === "error" ? "error" : "success"}">${escapeHtml(state.cloudSyncNotice.text)}</div>`
+    : "";
+  return `
+    <section class="archive-panel">
+      <h3>云同步</h3>
+      <p class="muted-text">${config.enabled ? "已配置云同步。保存、导入、删除后会自动同步到私有接口。" : "配置私有同步接口后，公网手机端和电脑端可以读写同一份日记数据。"}</p>
+      ${notice}
+      <form id="cloud-sync-form" class="password-settings-form">
+        <div class="field">
+          <label for="cloud-sync-api">同步接口地址</label>
+          <input id="cloud-sync-api" name="api" value="${escapeHtml(config.api)}" placeholder="https://你的-worker.workers.dev" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="cloud-sync-token">同步密钥</label>
+          <input id="cloud-sync-token" name="token" type="password" placeholder="${config.token ? "已保存，留空则不修改" : "填写 Worker 里设置的 SYNC_TOKEN"}" autocomplete="off" />
+        </div>
+        <div class="form-actions">
+          <span class="muted-text">${config.enabled ? "当前设备已绑定云同步。" : "同步密钥不会提交到 GitHub，只保存在当前浏览器。"}</span>
+          <button class="ghost-button" data-action="clear-cloud-sync" type="button">关闭云同步</button>
+          <button class="primary-button" type="submit">
+            <span class="icon" data-icon="save"></span><span>保存并同步</span>
+          </button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
 function renderArchive() {
   const notice = state.securityNotice
     ? `<div class="form-message ${state.securityNotice.type === "error" ? "error" : "success"}">${escapeHtml(state.securityNotice.text)}</div>`
@@ -4295,6 +4382,7 @@ function renderArchive() {
       <h3>数据体检</h3>
       ${renderDataHealth(counts, snapshots)}
     </section>
+    ${renderCloudSyncPanel()}
     <section class="archive-panel security-panel">
       <div class="panel-head">
         <div>
@@ -4391,6 +4479,44 @@ function getImportedSourceIds() {
 function saveImportedSourceIds(ids) {
   localStorage.setItem(IMPORTED_SOURCE_IDS_KEY, JSON.stringify([...ids]));
   queueSharedStorageWrite("导入来源记录");
+}
+
+async function handleCloudSyncSettings(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const current = getCloudSyncConfig();
+  const api = normalizeSyncApi(data.api);
+  const token = String(data.token || "").trim() || current.token;
+
+  if (!api || !token) {
+    state.cloudSyncNotice = { type: "error", text: "请填写同步接口地址和同步密钥。" };
+    render();
+    return;
+  }
+
+  if (!/^https:\/\/.+/i.test(api) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?/i.test(api)) {
+    state.cloudSyncNotice = { type: "error", text: "公网同步接口必须使用 https 地址。" };
+    render();
+    return;
+  }
+
+  saveCloudSyncConfig(api, token);
+  try {
+    await initializeSharedStorage();
+    loadEntries();
+    state.cloudSyncNotice = { type: "success", text: `云同步已连接，当前本机 ${activeEntries().length} 篇日记。` };
+  } catch {
+    state.cloudSyncNotice = { type: "error", text: "云同步连接失败，请检查接口地址和同步密钥。" };
+  }
+  state.view = "archive";
+  render();
+}
+
+function handleClearCloudSync() {
+  clearCloudSyncConfig();
+  sharedStorageReady = false;
+  state.cloudSyncNotice = { type: "success", text: "已关闭当前浏览器的云同步配置。" };
+  state.view = "archive";
+  render();
 }
 
 async function loadJson(url) {
@@ -4996,6 +5122,10 @@ document.addEventListener("click", async (event) => {
     handleCreateDataSnapshot();
     return;
   }
+  if (action === "clear-cloud-sync") {
+    handleClearCloudSync();
+    return;
+  }
   if (action === "restore-data-snapshot") {
     restoreDataSnapshot(id);
     return;
@@ -5032,6 +5162,10 @@ document.addEventListener("submit", async (event) => {
   }
   if (event.target.id === "recovery-change-form") {
     await handleRecoveryChange(event.target);
+    return;
+  }
+  if (event.target.id === "cloud-sync-form") {
+    await handleCloudSyncSettings(event.target);
     return;
   }
   if (event.target.id === "diary-form") saveEntryFromDraft();
@@ -5138,11 +5272,16 @@ async function repairQQNotepadBeforeAuth() {
   const previousView = state.view;
   loadEntries();
   const beforeCount = activeEntries().length;
-  if (isPublicStaticDeployment()) {
+  if (isPublicStaticDeployment() && !getCloudSyncConfig().enabled) {
     state.preAuthRepairNotice = {
       type: "success",
       text: "这是公网安全版，未携带本机日记数据。要查看真实日记，请用本地地址；公网同步需要再接私有后端。"
     };
+    state.view = previousView;
+    resetVisibleDiaryContent();
+    return;
+  }
+  if (isPublicStaticDeployment()) {
     state.view = previousView;
     resetVisibleDiaryContent();
     return;

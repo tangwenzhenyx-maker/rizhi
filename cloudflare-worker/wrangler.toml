@@ -1,0 +1,11 @@
+name = "rizhi-sync"
+main = "worker.js"
+compatibility_date = "2026-07-02"
+
+kv_namespaces = [
+  { binding = "RIZHI_STORE", id = "REPLACE_WITH_KV_NAMESPACE_ID" }
+]
+
+[vars]
+ALLOWED_ORIGINS = "https://tangwenzhenyx-maker.github.io,http://127.0.0.1:8782,http://localhost:8782"
+
