@@ -117,6 +117,10 @@ function uid() {
   return `id-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function isPublicStaticDeployment() {
+  return /(^|\.)github\.io$/i.test(window.location.hostname);
+}
+
 function parseJsonSafe(raw, fallback = null) {
   try {
     return raw ? JSON.parse(raw) : fallback;
@@ -5122,7 +5126,9 @@ async function startApp() {
   showAppShell();
   hydrateStaticIcons();
   loadEntries();
-  await importQQNotepadIfAvailable({ quiet: activeEntries().length > 0, renderAfter: false });
+  if (!isPublicStaticDeployment()) {
+    await importQQNotepadIfAvailable({ quiet: activeEntries().length > 0, renderAfter: false });
+  }
   restoreEditorDraftAfterUnlock();
   render();
   startAutoLockTimer();
@@ -5132,6 +5138,15 @@ async function repairQQNotepadBeforeAuth() {
   const previousView = state.view;
   loadEntries();
   const beforeCount = activeEntries().length;
+  if (isPublicStaticDeployment()) {
+    state.preAuthRepairNotice = {
+      type: "success",
+      text: "这是公网安全版，未携带本机日记数据。要查看真实日记，请用本地地址；公网同步需要再接私有后端。"
+    };
+    state.view = previousView;
+    resetVisibleDiaryContent();
+    return;
+  }
   const result = await importQQNotepadIfAvailable({ quiet: true, renderAfter: false });
   if (result?.error) {
     state.preAuthRepairNotice = {
