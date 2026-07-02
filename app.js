@@ -113,6 +113,7 @@ const searchInput = document.querySelector("#global-search");
 let autoLockTimer = null;
 let lastActivityAt = Date.now();
 let sharedStorageReady = false;
+let sharedStorageLastError = "";
 let sharedStorageWriteQueue = Promise.resolve();
 let sharedStorageLastSignature = "";
 
@@ -471,19 +472,23 @@ function queueSharedStorageWrite(reason = "数据同步") {
 }
 
 async function initializeSharedStorage() {
-  if (typeof fetch !== "function") return;
+  if (typeof fetch !== "function") return false;
   applyCloudSyncConfigFromUrl();
-  if (isPublicStaticDeployment() && !getCloudSyncConfig().enabled) return;
+  if (isPublicStaticDeployment() && !getCloudSyncConfig().enabled) return false;
   try {
     const remoteKeys = await readSharedStorage();
     sharedStorageReady = true;
+    sharedStorageLastError = "";
     const localKeys = collectSharedStorageKeys();
     const merged = mergeSharedStorage(localKeys, remoteKeys);
     applySharedStorageKeys(merged);
     sharedStorageLastSignature = storageSignature(remoteKeys);
     await writeSharedStorage("启动同步");
-  } catch {
+    return true;
+  } catch (error) {
     sharedStorageReady = false;
+    sharedStorageLastError = String(error?.message || error || "sync_failed");
+    return false;
   }
 }
 
@@ -926,6 +931,34 @@ function renderLockScreen(mode = "unlock", message = "", messageType = "error") 
   `;
   hydrateStaticIcons();
   requestAnimationFrame(() => lockScreen.querySelector("input")?.focus());
+}
+
+function renderLockLoadingScreen(message = "请稍候") {
+  stopAutoLockTimer();
+  state.authMode = "loading";
+  setRecoveryVerified(false);
+  document.body.dataset.view = "locked";
+  appShell.classList.add("hidden");
+  lockScreen.classList.remove("hidden");
+  lockScreen.innerHTML = `
+    <div class="lock-card lock-card-minimal">
+      <form class="lock-form lock-form-minimal" aria-busy="true">
+        <div class="unlock-row">
+          <input
+            id="lock-password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            aria-label="密码"
+            placeholder="${escapeHtml(message)}"
+            disabled
+          />
+          <button class="primary-button" type="button" disabled>回车</button>
+        </div>
+        <button class="text-link lock-link" type="button" disabled>忘记密码？</button>
+      </form>
+    </div>
+  `;
 }
 
 function renderPasswordResetScreen(error = "") {
@@ -5375,9 +5408,14 @@ async function init() {
   document.querySelector("#today-label").textContent = dateLabel(todayStr());
   hydrateStaticIcons();
   setRecoveryVerified(false);
-  await initializeSharedStorage();
+  renderLockLoadingScreen();
+  const syncReady = await initializeSharedStorage();
   await repairQQNotepadBeforeAuth();
   const hasPassword = Boolean(getAuthConfig());
+  if (isPublicStaticDeployment() && getCloudSyncConfig().enabled && !syncReady && !hasPassword) {
+    renderLockScreen("unlock", sharedStorageLastError ? "同步失败，请刷新" : "正在准备");
+    return;
+  }
   if (!hasPassword) {
     renderLockScreen("setup");
     return;

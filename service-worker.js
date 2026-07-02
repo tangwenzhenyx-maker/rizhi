@@ -1,10 +1,10 @@
-const CACHE_NAME = "rizhi-pwa-v6";
+const CACHE_NAME = "rizhi-pwa-v7";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
-  "./app.js?v=20260702-e2e-sync",
+  "./app.js?v=20260702-mobile-startup",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",
