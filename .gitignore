@@ -1,0 +1,8 @@
+.DS_Store
+__pycache__/
+*.pyc
+.env
+
+# Private diary/import/runtime data. Do not publish these files.
+data/*
+!data/.gitkeep

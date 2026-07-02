@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f766e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="日记" />
+    <title>日记档案馆</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <section id="lock-screen" class="lock-screen hidden" aria-live="polite"></section>
+
+    <div class="app-shell hidden">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 48 48" role="img">
+              <path d="M14 8h18a6 6 0 0 1 6 6v26H16a6 6 0 0 1-6-6V12a4 4 0 0 1 4-4Z" />
+              <path d="M16 40V14a6 6 0 0 1 6-6" />
+              <path d="M22 18h8M22 25h10M22 32h6" />
+            </svg>
+          </div>
+          <div>
+            <h1>日记档案馆</h1>
+            <p id="today-label"></p>
+          </div>
+        </div>
+
+        <nav class="nav-stack">
+          <button class="nav-item active" data-view="library" type="button">
+            <span class="icon" data-icon="book"></span>
+            <span>日记库</span>
+          </button>
+          <button class="nav-item" data-action="new-entry" type="button">
+            <span class="icon" data-icon="pen"></span>
+            <span>写日记</span>
+          </button>
+          <button class="nav-item" data-view="import" type="button">
+            <span class="icon" data-icon="image"></span>
+            <span>历史导入</span>
+          </button>
+          <button class="nav-item" data-view="review" type="button">
+            <span class="icon" data-icon="check"></span>
+            <span>校对台</span>
+          </button>
+          <button class="nav-item" data-view="sync" type="button">
+            <span class="icon" data-icon="upload"></span>
+            <span>QQ同步</span>
+          </button>
+          <button class="nav-item" data-view="timeline" type="button">
+            <span class="icon" data-icon="clock"></span>
+            <span>时间轴</span>
+          </button>
+          <button class="nav-item" data-view="insights" type="button">
+            <span class="icon" data-icon="chart"></span>
+            <span>人生复盘</span>
+          </button>
+          <button class="nav-item" data-view="archive" type="button">
+            <span class="icon" data-icon="archive"></span>
+            <span>备份</span>
+          </button>
+          <button class="nav-item" data-view="trash" type="button">
+            <span class="icon" data-icon="trash"></span>
+            <span>回收站</span>
+          </button>
+          <button class="nav-item lock-nav" data-action="lock-now" type="button">
+            <span class="icon" data-icon="lock"></span>
+            <span>锁定退出</span>
+          </button>
+        </nav>
+
+        <div class="side-stats" id="side-stats"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="search-wrap">
+            <span class="icon" data-icon="search"></span>
+            <input id="global-search" type="search" placeholder="搜索回忆、人物、地点、标签" />
+          </div>
+          <div class="topbar-actions">
+            <button class="ghost-button" data-action="random-entry" type="button" title="随机回看">
+              <span class="icon" data-icon="shuffle"></span>
+              <span>随机回看</span>
+            </button>
+            <button class="primary-button" data-action="new-entry" type="button">
+              <span class="icon" data-icon="plus"></span>
+              <span>写一篇</span>
+            </button>
+          </div>
+        </header>
+
+        <section id="app" class="view"></section>
+      </main>
+    </div>
+
+    <template id="icon-template">
+      <svg data-name="book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15Z"/></svg>
+      <svg data-name="pen" viewBox="0 0 24 24"><path d="m16.5 3.5 4 4L8 20H4v-4L16.5 3.5Z"/><path d="m14 6 4 4"/></svg>
+      <svg data-name="image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 16 5-5 4 4 3-3 6 6"/><path d="M14 9h.01"/></svg>
+      <svg data-name="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <svg data-name="chart" viewBox="0 0 24 24"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 16v-5"/><path d="M12 16V8"/><path d="M16 16v-7"/></svg>
+      <svg data-name="archive" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M5 7v13h14V7"/><path d="M3 3h18v4H3z"/><path d="M9 12h6"/></svg>
+      <svg data-name="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg>
+      <svg data-name="shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="m15 15 6 6"/><path d="M4 4l5 5"/></svg>
+      <svg data-name="plus" viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+      <svg data-name="save" viewBox="0 0 24 24"><path d="M5 3h12l2 2v16H5z"/><path d="M8 3v6h8V3"/><path d="M8 21v-7h8v7"/></svg>
+      <svg data-name="trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></svg>
+      <svg data-name="edit" viewBox="0 0 24 24"><path d="m14 5 5 5L9 20H4v-5L14 5Z"/><path d="m12 7 5 5"/></svg>
+      <svg data-name="check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></svg>
+      <svg data-name="download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      <svg data-name="upload" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+      <svg data-name="lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 15v2"/></svg>
+    </template>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.has("reset-mobile")) return;
+        try {
+          localStorage.clear();
+          sessionStorage.clear();
+        } catch {}
+        if ("caches" in window) {
+          caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))).catch(() => {});
+        }
+        if ("serviceWorker" in navigator) {
+          navigator.serviceWorker.getRegistrations().then((items) => items.forEach((item) => item.unregister())).catch(() => {});
+        }
+      })();
+    </script>
+    <script src="./app.js?v=20260702-mobile-unlock"></script>
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./service-worker.js").catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>
