@@ -269,6 +269,10 @@ function normalizeMergedEntry(entry) {
 }
 
 function mergeEntryStorage(localRaw, remoteRaw) {
+  if (!localRaw) return remoteRaw || "";
+  if (!remoteRaw) return localRaw || "";
+  if (localRaw === remoteRaw) return localRaw;
+
   const localEntries = parseJsonSafe(localRaw, []);
   const remoteEntries = parseJsonSafe(remoteRaw, []);
   const items = [...(Array.isArray(remoteEntries) ? remoteEntries : []), ...(Array.isArray(localEntries) ? localEntries : [])];
