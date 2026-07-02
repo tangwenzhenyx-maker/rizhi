@@ -10,15 +10,22 @@ import json
 import os
 import re
 import tempfile
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 STORE_PATH = DATA_DIR / "shared-storage.json"
 BACKUP_PATH = DATA_DIR / "shared-storage-backups.jsonl"
+SYNC_TOKEN_PATH = APP_DIR / "cloudflare-worker" / ".sync-token"
+SYNC_KEY_PATH = APP_DIR / "cloudflare-worker" / ".sync-key"
+CLOUD_SYNC_API = "https://rizhi-sync.tangwenzhenyx-rili.workers.dev/api/storage"
 STORAGE_KEY = "rizhi.diary.entries.v1"
 STORAGE_BACKUP_KEY = "rizhi.diary.entries.backup.v1"
 STORAGE_SNAPSHOT_KEY = "rizhi.diary.snapshots.v1"
@@ -28,6 +35,14 @@ LIFE_QA_KEY = "rizhi.life.questions.v1"
 IMPORTED_SOURCE_IDS_KEY = "rizhi.imported.sourceIds.v1"
 AUTH_KEY = "rizhi.auth.v1"
 SNAPSHOT_LIMIT = 12
+CLOUD_SYNC_KEYS = {
+    STORAGE_KEY,
+    DUPLICATE_IGNORE_KEY,
+    LIFE_REPORT_KEY,
+    LIFE_QA_KEY,
+    IMPORTED_SOURCE_IDS_KEY,
+    AUTH_KEY,
+}
 
 
 def now_iso() -> str:
@@ -52,6 +67,123 @@ def read_store() -> dict:
         "reason": str(data.get("reason") or ""),
         "keys": {str(key): value for key, value in keys.items() if isinstance(value, str)},
     }
+
+
+def read_private_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def cloud_sync_available() -> bool:
+    return bool(read_private_text(SYNC_TOKEN_PATH) and read_private_text(SYNC_KEY_PATH))
+
+
+def cloud_core_keys(keys: dict) -> dict[str, str]:
+    return {str(key): value for key, value in keys.items() if key in CLOUD_SYNC_KEYS and isinstance(value, str)}
+
+
+def decrypt_cloud_payload(payload: dict) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        return {}
+    iv_raw = payload.get("iv")
+    ciphertext_raw = payload.get("ciphertext")
+    if not iv_raw or not ciphertext_raw:
+        return {}
+    key = base64.b64decode(read_private_text(SYNC_KEY_PATH))
+    iv = base64.b64decode(str(iv_raw))
+    ciphertext = base64.b64decode(str(ciphertext_raw))
+    plaintext = AESGCM(key).decrypt(iv, ciphertext, None)
+    data = json.loads(plaintext.decode("utf-8"))
+    keys = data.get("keys") if isinstance(data, dict) else {}
+    return cloud_core_keys(keys if isinstance(keys, dict) else {})
+
+
+def encrypt_cloud_keys(keys: dict, reason: str) -> dict:
+    key = base64.b64decode(read_private_text(SYNC_KEY_PATH))
+    iv = os.urandom(12)
+    plaintext = json.dumps(
+        {
+            "version": 1,
+            "reason": reason,
+            "createdAt": now_iso(),
+            "keys": cloud_core_keys(keys),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    ciphertext = AESGCM(key).encrypt(iv, plaintext, None)
+    return {
+        "version": 1,
+        "algorithm": "AES-GCM",
+        "keyFormat": "raw-256",
+        "iv": base64.b64encode(iv).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+    }
+
+
+def cloud_request(method: str, body: dict | None = None) -> dict:
+    token = read_private_text(SYNC_TOKEN_PATH)
+    if not token:
+        raise RuntimeError("missing_sync_token")
+    payload = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        CLOUD_SYNC_API,
+        data=payload,
+        method=method,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "rizhi-local-sync/1.0",
+            **({"Content-Type": "application/json"} if payload is not None else {}),
+        },
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def read_cloud_store() -> dict:
+    data = cloud_request("GET")
+    if data.get("encrypted"):
+        keys = decrypt_cloud_payload(data.get("payload") if isinstance(data.get("payload"), dict) else {})
+    else:
+        raw_keys = data.get("keys") if isinstance(data, dict) else {}
+        keys = cloud_core_keys(raw_keys if isinstance(raw_keys, dict) else {})
+    return {
+        "version": 1,
+        "updatedAt": str(data.get("updatedAt") or ""),
+        "reason": str(data.get("reason") or ""),
+        "keys": keys,
+    }
+
+
+def write_cloud_store(keys: dict, reason: str) -> dict:
+    encrypted_payload = encrypt_cloud_keys(keys, reason)
+    return cloud_request(
+        "POST",
+        {
+            "reason": reason,
+            "encrypted": True,
+            "payload": encrypted_payload,
+        },
+    )
+
+
+def write_local_cache(keys: dict, reason: str) -> dict:
+    previous = read_store()
+    cached_keys = dict(previous.get("keys", {}))
+    cached_keys.update(keys)
+    payload = {
+        "version": 1,
+        "updatedAt": now_iso(),
+        "reason": reason,
+        "keys": cached_keys,
+    }
+    if previous.get("keys") != cached_keys:
+        append_backup(previous, reason)
+        atomic_write_json(STORE_PATH, payload)
+    return payload
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
@@ -194,7 +326,7 @@ def valid_auth(raw: str | None) -> bool:
 
 
 def verify_password_with_store(password: str) -> bool:
-    store = read_store()
+    store = read_unified_store()
     auth_raw = store.get("keys", {}).get(AUTH_KEY)
     auth = parse_json_safe(auth_raw, {})
     if not isinstance(auth, dict):
@@ -295,6 +427,70 @@ def merge_storage_keys(existing: dict, incoming: dict) -> dict:
     return merged
 
 
+def read_unified_store() -> dict:
+    local = read_store()
+    if not cloud_sync_available():
+        return local
+
+    try:
+        cloud = read_cloud_store()
+        merged_keys = merge_storage_keys(cloud.get("keys", {}), cloud_core_keys(local.get("keys", {})))
+        if merged_keys != cloud.get("keys", {}):
+            write_cloud_store(merged_keys, "PC 本地缓存合并到云端")
+        write_local_cache(merged_keys, "从云端同步到本机缓存")
+        return {
+            "version": 1,
+            "updatedAt": str(cloud.get("updatedAt") or now_iso()),
+            "reason": str(cloud.get("reason") or "云同步"),
+            "keys": merged_keys,
+            "source": "cloud",
+        }
+    except Exception as error:
+        return {
+            **local,
+            "source": "local-cache",
+            "warning": f"cloud_unavailable:{error.__class__.__name__}",
+        }
+
+
+def write_unified_store(incoming_keys: dict, reason: str) -> dict:
+    cleaned = {str(key): value for key, value in incoming_keys.items() if isinstance(value, str)}
+
+    if cloud_sync_available():
+        try:
+            cloud = read_cloud_store()
+            merged_keys = merge_storage_keys(cloud.get("keys", {}), cloud_core_keys(cleaned))
+            write_cloud_store(merged_keys, reason)
+            cached = write_local_cache(merged_keys, reason)
+            return {
+                "ok": True,
+                "source": "cloud",
+                "updatedAt": cached["updatedAt"],
+                "keyCount": len(merged_keys),
+            }
+        except Exception as error:
+            previous = read_store()
+            merged_keys = merge_storage_keys(previous.get("keys", {}), cleaned)
+            cached = write_local_cache(merged_keys, f"{reason}（云端暂不可用，本机缓存）")
+            return {
+                "ok": True,
+                "source": "local-cache",
+                "warning": f"cloud_unavailable:{error.__class__.__name__}",
+                "updatedAt": cached["updatedAt"],
+                "keyCount": len(merged_keys),
+            }
+
+    previous = read_store()
+    merged_keys = merge_storage_keys(previous.get("keys", {}), cleaned)
+    cached = write_local_cache(merged_keys, reason)
+    return {
+        "ok": True,
+        "source": "local",
+        "updatedAt": cached["updatedAt"],
+        "keyCount": len(merged_keys),
+    }
+
+
 class DiaryHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(APP_DIR), **kwargs)
@@ -313,7 +509,7 @@ class DiaryHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path.split("?", 1)[0] == "/api/storage":
-            self.send_json(200, read_store())
+            self.send_json(200, read_unified_store())
             return
         super().do_GET()
 
@@ -353,22 +549,8 @@ class DiaryHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "missing_keys"})
             return
 
-        cleaned = {str(key): value for key, value in keys.items() if isinstance(value, str)}
-        previous = read_store()
         reason = str(incoming.get("reason") or "数据同步")
-        merged_keys = merge_storage_keys(previous.get("keys", {}), cleaned)
-        payload = {
-            "version": 1,
-            "updatedAt": now_iso(),
-            "reason": reason,
-            "keys": merged_keys,
-        }
-
-        if previous.get("keys") != merged_keys:
-            append_backup(previous, reason)
-            atomic_write_json(STORE_PATH, payload)
-
-        self.send_json(200, {"ok": True, "updatedAt": payload["updatedAt"], "keyCount": len(merged_keys)})
+        self.send_json(200, write_unified_store(keys, reason))
 
 
 def main() -> None:

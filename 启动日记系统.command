@@ -3,7 +3,7 @@
 set -u
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOST="0.0.0.0"
+HOST="127.0.0.1"
 LOCAL_HOST="127.0.0.1"
 START_PORT="${PORT:-8782}"
 PORT="$START_PORT"
@@ -62,14 +62,12 @@ serves_this_app() {
   serves_this_app_at "$LOCAL_HOST" "$1"
 }
 
-LAN_IP="$(get_lan_ip)"
+LAN_IP=""
 EXISTING_SERVER=0
 while port_busy "$PORT"; do
   if serves_this_app "$PORT"; then
-    if [ -z "$LAN_IP" ] || serves_this_app_at "$LAN_IP" "$PORT"; then
-      EXISTING_SERVER=1
-      break
-    fi
+    EXISTING_SERVER=1
+    break
   fi
 
   if serves_static_app_at "$LOCAL_HOST" "$PORT"; then
@@ -91,18 +89,12 @@ done
 
 FRESH_ID="$(date +%Y%m%d%H%M%S)"
 LOCAL_URL="http://${LOCAL_HOST}:${PORT}/?fresh=${FRESH_ID}"
-if [ -n "$LAN_IP" ]; then
-  MOBILE_URL="http://${LAN_IP}:${PORT}/?fresh=${FRESH_ID}"
-else
-  MOBILE_URL=""
-fi
+MOBILE_URL="https://tangwenzhenyx-maker.github.io/rizhi/"
 
 if [ "$EXISTING_SERVER" -eq 1 ]; then
   echo "Diary system is already running."
   echo "Computer: $LOCAL_URL"
-  if [ -n "$MOBILE_URL" ]; then
-    echo "Phone on the same Wi-Fi: $MOBILE_URL"
-  fi
+  echo "Phone: $MOBILE_URL"
   if command -v open >/dev/null 2>&1; then
     open "$LOCAL_URL"
   fi
@@ -157,9 +149,9 @@ fi
 echo "Diary system is running:"
 echo "Computer: $LOCAL_URL"
 if [ -n "$MOBILE_URL" ]; then
-  echo "Phone on the same Wi-Fi: $MOBILE_URL"
+  echo "Phone: $MOBILE_URL"
 else
-  echo "Phone: cannot detect this Mac's Wi-Fi IP. Check System Settings -> Wi-Fi -> Details."
+  echo "Phone: use the GitHub Pages PWA after cloud binding."
 fi
 echo
 echo "Keep this window open while using the system."
