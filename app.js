@@ -29,6 +29,14 @@ const SHARED_STORAGE_KEYS = [
   IMPORTED_SOURCE_IDS_KEY,
   AUTH_KEY
 ];
+const CLOUD_SYNC_STORAGE_KEYS = [
+  STORAGE_KEY,
+  DUPLICATE_IGNORE_KEY,
+  LIFE_REPORT_KEY,
+  LIFE_QA_KEY,
+  IMPORTED_SOURCE_IDS_KEY,
+  AUTH_KEY
+];
 
 const THEME_MAP = {
   工作: ["工作", "项目", "会议", "加班", "同事", "领导", "汇报", "任务", "单位"],
@@ -235,8 +243,12 @@ async function decryptCloudStoragePayload(payload) {
   return data?.keys && typeof data.keys === "object" ? data.keys : {};
 }
 
-function collectSharedStorageKeys() {
-  return SHARED_STORAGE_KEYS.reduce((payload, key) => {
+function sharedStorageKeyList() {
+  return getCloudSyncConfig().enabled ? CLOUD_SYNC_STORAGE_KEYS : SHARED_STORAGE_KEYS;
+}
+
+function collectSharedStorageKeys(keys = sharedStorageKeyList()) {
+  return keys.reduce((payload, key) => {
     const value = localStorage.getItem(key);
     if (value !== null) payload[key] = value;
     return payload;
@@ -426,8 +438,8 @@ function applySharedStorageKeys(keys = {}) {
   });
 }
 
-function storageSignature(keys = collectSharedStorageKeys()) {
-  return SHARED_STORAGE_KEYS.map((key) => `${key}:${keys[key] || ""}`).join("\n");
+function storageSignature(keys = collectSharedStorageKeys(), signatureKeys = sharedStorageKeyList()) {
+  return signatureKeys.map((key) => `${key}:${keys[key] || ""}`).join("\n");
 }
 
 async function readSharedStorage() {
@@ -479,7 +491,7 @@ async function initializeSharedStorage() {
     const remoteKeys = await readSharedStorage();
     sharedStorageReady = true;
     sharedStorageLastError = "";
-    const localKeys = collectSharedStorageKeys();
+    const localKeys = collectSharedStorageKeys(SHARED_STORAGE_KEYS);
     const merged = mergeSharedStorage(localKeys, remoteKeys);
     applySharedStorageKeys(merged);
     sharedStorageLastSignature = storageSignature(remoteKeys);
