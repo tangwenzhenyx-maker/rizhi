@@ -159,6 +159,34 @@ function clearCloudSyncConfig() {
   localStorage.removeItem(CLOUD_SYNC_ENCRYPTION_KEY);
 }
 
+function parseCloudSyncConfigText(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const cleanSecret = (text) => String(text || "").trim().replace(/\s/g, "+");
+
+  const readParams = (text) => {
+    const params = new URLSearchParams(text.replace(/^[?#]/, ""));
+    return {
+      api: params.get("syncApi") || "",
+      token: cleanSecret(params.get("syncToken")),
+      encryptionKey: cleanSecret(params.get("syncKey"))
+    };
+  };
+
+  try {
+    const url = new URL(raw);
+    const queryConfig = readParams(url.search);
+    const hashConfig = readParams(url.hash);
+    return {
+      api: hashConfig.api || queryConfig.api,
+      token: hashConfig.token || queryConfig.token,
+      encryptionKey: hashConfig.encryptionKey || queryConfig.encryptionKey
+    };
+  } catch {
+    return readParams(raw);
+  }
+}
+
 function applyCloudSyncConfigFromUrl() {
   const params = new URLSearchParams(window.location.search);
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
@@ -1026,6 +1054,33 @@ function renderLockLoadingScreen(message = "请稍候") {
       </form>
     </div>
   `;
+}
+
+function renderCloudBindScreen(message = "", messageType = "error") {
+  stopAutoLockTimer();
+  state.authMode = "cloud-bind";
+  setRecoveryVerified(false);
+  document.body.dataset.view = "locked";
+  appShell.classList.add("hidden");
+  lockScreen.classList.remove("hidden");
+  lockScreen.innerHTML = `
+    <div class="lock-card lock-card-minimal cloud-bind-card">
+      <form id="cloud-bind-form" class="lock-form lock-form-minimal">
+        <div class="field">
+          <label for="cloud-bind-url">绑定地址</label>
+          <input
+            id="cloud-bind-url"
+            name="bindUrl"
+            autocomplete="off"
+            placeholder="粘贴绑定地址"
+          />
+        </div>
+        ${message ? `<div class="form-message ${messageType === "success" ? "success" : "error"}">${escapeHtml(message)}</div>` : ""}
+        <button class="primary-button full-width" type="submit">绑定</button>
+      </form>
+    </div>
+  `;
+  requestAnimationFrame(() => lockScreen.querySelector("input")?.focus());
 }
 
 function renderPasswordResetScreen(error = "") {
@@ -4678,6 +4733,27 @@ async function handleCloudSyncSettings(form) {
   render();
 }
 
+async function handleCloudBind(form) {
+  const data = Object.fromEntries(new FormData(form).entries());
+  const config = parseCloudSyncConfigText(data.bindUrl);
+  if (!config?.api || !config?.token || !config?.encryptionKey) {
+    renderCloudBindScreen("绑定地址不完整。");
+    return;
+  }
+
+  saveCloudSyncConfig(config.api, config.token, config.encryptionKey);
+  renderLockLoadingScreen("请稍候");
+  const synced = await initializeSharedStorage();
+  const authConfig = getAuthConfig();
+  if (!synced || !authConfig) {
+    clearCloudSyncConfig();
+    renderCloudBindScreen("绑定失败，请确认地址是最新的。");
+    return;
+  }
+
+  renderLockScreen("unlock");
+}
+
 function handleClearCloudSync() {
   clearCloudSyncConfig();
   sharedStorageReady = false;
@@ -5341,6 +5417,10 @@ document.addEventListener("submit", async (event) => {
     await handleCloudSyncSettings(event.target);
     return;
   }
+  if (event.target.id === "cloud-bind-form") {
+    await handleCloudBind(event.target);
+    return;
+  }
   if (event.target.id === "diary-form") saveEntryFromDraft();
   if (event.target.id === "import-form") saveImportFromDraft();
 });
@@ -5490,6 +5570,10 @@ async function init() {
   const syncReady = await initializeSharedStorage();
   await repairQQNotepadBeforeAuth();
   const hasPassword = Boolean(getAuthConfig());
+  if (isPublicStaticDeployment() && !getCloudSyncConfig().enabled) {
+    renderCloudBindScreen();
+    return;
+  }
   if (isPublicStaticDeployment() && getCloudSyncConfig().enabled && !syncReady && !hasPassword) {
     renderLockScreen("unlock", sharedStorageLastError ? "同步失败，请刷新" : "正在准备");
     return;

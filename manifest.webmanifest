@@ -3,7 +3,6 @@
   "short_name": "日记",
   "description": "用于记录、导入、整理、备份和复盘个人日记的私人工具。",
   "lang": "zh-CN",
-  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
